@@ -46,9 +46,9 @@ def search():
                 continue
 
             raw_thumb = item.get('thumbnails', [{}])[-1].get('url', '')
-            thumb_proxy = f"http://192.168.1.123:3001/proxy-thumbnail?url={raw_thumb}"
+            thumb_proxy = raw_thumb
 
-            mp3_url = f"http://192.168.1.123:3001/download/{video_id}.mp3"
+            mp3_url = f"http://localhost:3001/download/{video_id}.mp3"
 
             results.append({
                 'title': item.get('title'),
@@ -145,4 +145,4 @@ def stream_audio(path):
 
 
 if __name__ == '__main__':
-    app.run(host='192.168.1.123', port=3001)
+    app.run(host='0.0.0.0', port=3001)
