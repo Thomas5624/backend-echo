@@ -1,5 +1,6 @@
 Flask
 flask-cors
 ytmusicapi
-yt-dlp
+yt-dlp>=2023.12.30
 requests
+gunicorn
