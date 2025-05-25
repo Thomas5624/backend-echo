@@ -4,3 +4,4 @@ ytmusicapi
 yt-dlp>=2023.12.30
 requests
 gunicorn
+colorthief
