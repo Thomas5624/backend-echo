@@ -16,7 +16,7 @@ CORS(app)
 
 ytmusic = YTMusic()
 
-BACKEND_URL = "http://192.168.1.47:3001"
+BACKEND_URL = "https://backend-echo.onrender.com"
 DOWNLOAD_FOLDER = os.path.join(os.getcwd(), "static")
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
