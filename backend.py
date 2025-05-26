@@ -16,7 +16,7 @@ CORS(app)
 
 ytmusic = YTMusic()
 
-BACKEND_URL = "https://backend-echo.onrender.com"
+BACKEND_URL = "https://render.com/docs/web-services#port-binding"
 DOWNLOAD_FOLDER = os.path.join(os.getcwd(), "static")
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
