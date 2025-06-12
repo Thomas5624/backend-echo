@@ -9,14 +9,38 @@ from ytmusicapi import YTMusic
 from yt_dlp import YoutubeDL
 from io import BytesIO
 import traceback
+import subprocess
 from colorthief import ColorThief
+from flask import stream_with_context
+from mutagen.mp3 import MP3
+import subprocess
+import yt_dlp
+
+
+def parse_duration(duration_str):
+    """Converte una durata in formato 'M:SS' o 'H:MM:SS' in secondi."""
+    if not duration_str:
+        return 0
+    parts = duration_str.strip().split(':')
+    try:
+        parts = [int(p) for p in parts]
+        if len(parts) == 3:
+            return parts[0]*3600 + parts[1]*60 + parts[2]
+        elif len(parts) == 2:
+            return parts[0]*60 + parts[1]
+        elif len(parts) == 1:
+            return parts[0]
+        else:
+            return 0
+    except ValueError:
+        return 0
 
 app = Flask(__name__)
 CORS(app)
 
 ytmusic = YTMusic()
 
-BACKEND_URL = "https://render.com/docs/web-services#port-binding"
+BACKEND_URL = "http://localhost:3001"
 DOWNLOAD_FOLDER = os.path.join(os.getcwd(), "static")
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
@@ -48,7 +72,7 @@ def search():
                 'title': item.get('title'),
                 'album': item.get('album'),
                 'artist': ', '.join([a['name'] for a in item.get('artists', [])]),
-                'duration': item.get('duration'),
+                'duration': parse_duration(item.get('duration')),
                 'thumbnail': item.get('thumbnails', [{}])[-1].get('url', ''),
                 'videoId': item.get('videoId'),
                 'url': f"{BACKEND_URL}/download/{item.get('videoId')}.mp3"
@@ -129,7 +153,8 @@ def get_album_tracks(album_id):
                 'artist': ', '.join([a['name'] for a in track.get('artists', [])]) if track.get('artists') else 'Sconosciuto',
                 'thumbnail': proxied_thumbnail,
                 'videoId': track.get('videoId'),
-                'url': f"{BACKEND_URL}/download/{track.get('videoId')}.mp3"
+                'url': f"{BACKEND_URL}/download/{track.get('videoId')}.mp3",
+                'duration': parse_duration(track.get('duration'))
             })
 
         return jsonify(track_info)
@@ -183,7 +208,8 @@ def get_playlist_tracks(playlist_id):
                 'artist': ', '.join([a['name'] for a in artists]),
                 'thumbnail': proxied_thumbnail,
                 'videoId': video_id,
-                'url': f"{BACKEND_URL}/download/{video_id}.mp3"
+                'url': f"{BACKEND_URL}/download/{video_id}.mp3",
+                'duration': parse_duration(track.get('duration'))
             })
 
         return jsonify(track_info)
@@ -192,6 +218,34 @@ def get_playlist_tracks(playlist_id):
         print(f"❌ Errore nel recupero playlist: {str(e)}")
         traceback.print_exc()
         return jsonify({'error': f"Errore nel recupero delle tracce: {str(e)}"}), 500
+    
+
+@app.route('/duration-file/<video_id>')
+def get_duration(video_id):
+    try:
+        url = f"https://www.youtube.com/watch?v={video_id}"
+
+        ydl_opts = {
+            'quiet': True,
+            'skip_download': True,
+            'forcejson': True,
+        }
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            print("Metadata yt_dlp:", info)
+
+            duration = info.get('duration')
+            if duration is None:
+                return jsonify({'error': 'Durata non trovata', 'duration': None}), 200
+
+            return jsonify({'duration': duration})
+
+    except Exception as e:
+        print("Errore nel backend:", str(e))
+        return jsonify({'error': str(e), 'duration': None}), 200
+    
+
 
 @app.route('/proxy-thumbnail')
 def proxy_thumbnail():
@@ -213,31 +267,62 @@ def proxy_thumbnail():
     except Exception as e:
         return jsonify({'error': f'Errore nel proxy: {str(e)}'}), 500
 
+
 @app.route('/download/<video_id>.mp3')
 def download_mp3(video_id):
-    output_path = os.path.join(DOWNLOAD_FOLDER, f"{video_id}.mp3")
+    try:
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'quiet': True,
+            'noplaylist': True,
+            'outtmpl': '-',  # output su stdout
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+            'postprocessor_args': [
+                '-f', 'mp3',
+                '-vn'
+            ],
+            'prefer_ffmpeg': True,
+            'ffmpeg_location': 'ffmpeg',  # assicurati che ffmpeg sia nel PATH
+        }
 
-    if not os.path.exists(output_path):
-        try:
-            ydl_opts = {
-                'format': 'bestaudio/best',
-                'quiet': True,
-                'noplaylist': True,
-                'outtmpl': os.path.join(DOWNLOAD_FOLDER, f'{video_id}.%(ext)s'),
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '192',
-                }],
-            }
+        def generate():
 
             with YoutubeDL(ydl_opts) as ydl:
-                ydl.download([f'https://www.youtube.com/watch?v={video_id}'])
 
-            threading.Thread(target=delete_file_after_delay, args=(output_path, 1800)).start()
+                url = f'https://www.youtube.com/watch?v={video_id}'
 
-        except Exception as e:
-            return jsonify({'error': str(e)}), 500
+                proc_yt = subprocess.Popen(
+                    ['yt-dlp', '-f', 'bestaudio', '-o', '-', url],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL
+                )
+
+                proc_ffmpeg = subprocess.Popen(
+                    ['ffmpeg', '-i', 'pipe:0', '-f', 'mp3', '-ab', '192000', '-vn', 'pipe:1'],
+                    stdin=proc_yt.stdout,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL
+                )
+                proc_yt.stdout.close() 
+
+                while True:
+                    data = proc_ffmpeg.stdout.read(4096)
+                    if not data:
+                        break
+                    yield data
+
+                proc_ffmpeg.stdout.close()
+                proc_ffmpeg.wait()
+                proc_yt.wait()
+
+        return Response(stream_with_context(generate()), mimetype='audio/mpeg')
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
     return stream_audio(output_path)
 
@@ -277,6 +362,8 @@ def dominant_color():
     dominant_color = color_thief.get_color(quality=1)
     return jsonify({'color': dominant_color})
 
+
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 10000))
+    port = int(os.environ.get('PORT', 3001))
     app.run(host='0.0.0.0', port=port)
+    
